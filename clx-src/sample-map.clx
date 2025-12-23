@@ -1,0 +1,27 @@
+<?xml version="1.1" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:cl="http://tomatosystem.co.kr/cleopatra" xmlns:std="http://tomatosystem.co.kr/cleopatra/studio" std:sid="html-4ecf2650" version="1.0.5949">
+  <head std:sid="head-c7e7255c">
+    <screen std:sid="screen-55d79602" id="default" name="default" width="1024px" height="768px"/>
+    <screen std:sid="screen-4d6d81aa" id="tablet" name="tablet" width="500px" height="667px"/>
+    <screen std:sid="screen-1a691ea3" id="mobile" name="mobile" width="350px" height="525px"/>
+    <cl:model std:sid="model-2a6f6cc8">
+      <cl:submission std:sid="submission-56188097" id="sms1" method="get" action="../api/map/sido.do">
+        <cl:listener std:sid="listener-a227995b" name="receive" handler="onSms1Receive"/>
+      </cl:submission>
+    </cl:model>
+    <cl:appspec/>
+  </head>
+  <body std:sid="body-a83f6a25">
+    <cl:udc std:sid="ud-control-ee4eba65" type="udc.udcMapEx">
+      <cl:formdata std:sid="f-data-37dec90f" row="0" col="0"/>
+    </cl:udc>
+    <cl:formlayout std:sid="f-layout-b4e841df" scrollable="false" hspace="10px" vspace="10px" top-margin="5px" right-margin="5px" bottom-margin="5px" left-margin="5px">
+      <cl:rows length="1" unit="FRACTION"/>
+      <cl:columns length="1" unit="FRACTION"/>
+    </cl:formlayout>
+  </body>
+  <std:studiosetting>
+    <std:hruler/>
+    <std:vruler/>
+  </std:studiosetting>
+</html>

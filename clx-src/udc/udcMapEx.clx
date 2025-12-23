@@ -1,0 +1,38 @@
+<?xml version="1.1" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:cl="http://tomatosystem.co.kr/cleopatra" xmlns:std="http://tomatosystem.co.kr/cleopatra/studio" std:sid="html-5432e0e1" version="1.0.0.0">
+  <head std:sid="head-b68ebcca">
+    <title>udcMapEx</title>
+    <screen std:sid="screen-361b6a59" id="EXB-FULL" name="EXB-FULL" width="1580px" height="768px" useCustomWidth="false" useCustomHeight="false" customHeight="600" customWidth="800" active="true"/>
+    <cl:model std:sid="model-ea5c9deb">
+      <cl:submission std:sid="submission-964220c5" id="sms1" method="get" action="../api/map/sido.do"/>
+    </cl:model>
+    <cl:appspec title="맵차트 예시">
+      <cl:property name="dataSet" type="control" std:desc="[DataSet] (필수) 연동할 데이터 셋"/>
+      <cl:property name="title" type="string" bindable="true" std:desc="[String] 타이틀"/>
+      <cl:property name="titlePosition" type="enumeration" default="top-left" bindable="true" std:desc="[Enumeration] 타이틀 위치 (default: top-left)">
+        <cl:available-value>top-left</cl:available-value>
+        <cl:available-value>top-center</cl:available-value>
+        <cl:available-value>top-right</cl:available-value>
+        <cl:available-value>bottom-left</cl:available-value>
+        <cl:available-value>bottom-center</cl:available-value>
+        <cl:available-value>bottom-right</cl:available-value>
+      </cl:property>
+      <cl:property name="showTooltip" type="boolean" default="true" bindable="true" std:desc="[Boolean] 툴팁 사용 여부 (default: true)"/>
+      <cl:property name="itemColNm" type="string" default="ITEM" bindable="true" std:desc="[String] 항목 컬럼명 (default: ITEM)"/>
+      <cl:property name="valueColNm" type="string" default="VALUE" bindable="true" std:desc="[String] Y축(값) 컬럼명 (default: VALUE)"/>
+      <cl:event name="resize" type="cpr.events.CUIEvent"/>
+    </cl:appspec>
+  </head>
+  <body std:sid="body-7fb5f55f" style="top:0px; left:0px; width:300px; height:300px;">
+    <cl:uicontrolshell std:sid="uic-shell-1fb429ef" id="shl1">
+      <cl:listener std:sid="listener-1ce26230" name="init" handler="onShl1Init"/>
+      <cl:listener std:sid="listener-97fd5aba" name="load" handler="onShl1Load"/>
+      <cl:xylayoutdata std:sid="xyl-data-a1e7cec6" top="0px" right="0px" bottom="0px" left="0px" horizontalAnchor="BOTH" verticalAnchor="BOTH"/>
+    </cl:uicontrolshell>
+    <cl:xylayout std:sid="xylayout-03ae079b" scrollable="false"/>
+  </body>
+  <std:studiosetting>
+    <std:hruler/>
+    <std:vruler/>
+  </std:studiosetting>
+</html>

@@ -1,0 +1,1894 @@
+/************************************************
+ * Enhanced Map Chart with Full Features & Interactive UI
+ ************************************************/
+
+/**
+ * 전역 변수: 그리기 모드 상태 관리
+ */
+var drawState = {
+	mode: null, // 'marker', 'polyline', 'image', 'panel', 'sparkline'
+	tempPolyline: null, // 경로 그리기용 임시 라인
+	points: [] // 경로 포인트 배열
+};
+
+/**
+ * UDC 컨트롤이 그리드의 뷰 모드에서 표시할 텍스트를 반환합니다.
+ */
+exports.getText = function() {
+	return "Map Chart (Interactive)";
+};
+
+exports.drawChart = drawChart;
+
+/*
+ * 쉘에서 init 이벤트 발생 시 호출.
+ */
+function onShl1Init( /* cpr.events.CUIEvent */ e) {
+	/** @type cpr.controls.UIControlShell */
+	var shl1 = e.control;
+	
+	if (e.content) {
+		e.preventDefault();
+	}
+	
+	// 창 크기 변경 시 지도 리사이즈
+	window.addEventListener("resize", function(e) {
+		if (!app.disposed) {
+			var mapInstance = app.lookup("shl1").getComponent("leafletMap");
+			if (mapInstance) {
+				mapInstance.invalidateSize();
+			}
+		}
+	});
+}
+
+function onShl1Load(e) {
+	/** @type cpr.controls.UIControlShell */
+	var shl1 = e.control;
+	var voContent = e.content;
+	
+	if (!voContent) {
+		return;
+	}
+	
+	// 1단계: Leaflet 코어 로드
+	var leafletLoader = new cpr.core.ResourceLoader();
+	leafletLoader.addCSS("https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css");
+	leafletLoader.addScript("https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js");
+	
+	leafletLoader.load()
+		.then(function() {
+			console.log('Leaflet 로드 완료');
+			
+			// 2단계: MarkerCluster 플러그인 로드
+			var pluginLoader = new cpr.core.ResourceLoader();
+			pluginLoader.addCSS("https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.css");
+			pluginLoader.addCSS("https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.css");
+			pluginLoader.addScript("https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.min.js");
+			
+			return pluginLoader.load();
+		})
+		.then(function() {
+			console.log('MarkerCluster 로드 완료');
+			
+			// 3단계: 지도 초기화
+			shl1.registerComponent("voContent", voContent);
+			drawChart();
+		})
+		.catch(function(error) {
+			console.error('리소스 로드 실패:', error);
+			alert('지도 라이브러리를 불러오는데 실패했습니다.');
+		});
+}
+
+/**
+ * 지도를 그립니다.
+ */
+function drawChart() {
+	var poContent = app.lookup("shl1").getComponent("voContent");
+	if (!poContent) {
+		return;
+	}
+	
+	// 컨테이너 스타일 설정
+	poContent.style.width = "100%";
+	poContent.style.height = "100%";
+	
+	// 앱 프로퍼티에서 설정값 가져오기
+	var vsApiUrl = app.getAppProperty("apiUrl") || "http://localhost:8080";
+	var vsAdminLevel = app.getAppProperty("adminLevel") || "sido";
+	var vsTitle = app.getAppProperty("title");
+	var vbShowTooltip = app.getAppProperty("showTooltip") !== false;
+	var vbShowLegend = app.getAppProperty("showLegend") !== false;
+	var vaDataValues = app.getAppProperty("dataValues") || [];
+	var vsColorScheme = app.getAppProperty("colorScheme") || "blue";
+	var vaCustomColors = app.getAppProperty("customColors") || null;
+	var vbEnableDrilldown = app.getAppProperty("enableDrilldown") !== false;
+	var vbEnableDongDrilldown = app.getAppProperty("enableDongDrilldown") !== false;
+	var voMarkers = app.getAppProperty("markers") || [];
+	var voPolylines = app.getAppProperty("polylines") || [];
+	var voCustomImages = app.getAppProperty("customImages") || [];
+	var voPanels = app.getAppProperty("panels") || [];
+	var voSparkCharts = app.getAppProperty("sparkCharts") || [];
+	var voLabels = app.getAppProperty("labels") || [];
+	var voCustomTooltips = app.getAppProperty("customTooltips") || {};
+	var voHoverColors = app.getAppProperty("hoverColors") || {};
+	
+	// Leaflet 지도 초기화
+	var map = L.map(poContent, {
+		zoomControl: true,
+		scrollWheelZoom: true,
+		doubleClickZoom: true,
+		dragging: true
+	}).setView([36.5, 127.5], 7);
+	
+	// 베이스맵 추가
+	L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+		attribution: '© OpenStreetMap contributors',
+		maxZoom: 18
+	}).addTo(map);
+	
+	// 타이틀 추가
+	if (!ValueUtil.isNull(vsTitle)) {
+		var titleControl = L.control({
+			position: 'topleft'
+		});
+		titleControl.onAdd = function() {
+			var div = L.DomUtil.create('div', 'map-title');
+			div.style.background = 'white';
+			div.style.padding = '10px 15px';
+			div.style.borderRadius = '5px';
+			div.style.boxShadow = '0 2px 5px rgba(0,0,0,0.2)';
+			div.style.fontSize = '16px';
+			div.style.fontWeight = 'bold';
+			div.innerHTML = vsTitle;
+			return div;
+		};
+		titleControl.addTo(map);
+	}
+	
+	// 범례 추가
+	if (vbShowLegend) {
+		addLegendControl(map, vaDataValues, vsColorScheme, vaCustomColors);
+	}
+	
+	// [NEW] 사용자 그리기 툴바 추가
+	addDrawingToolbar(map);
+	
+	// [NEW] 지도 바탕 클릭 이벤트 (그리기 모드 처리)
+	map.on('click', function(e) {
+		handleMapClick(map, e);
+	});
+	
+	// [NEW] 더블 클릭 이벤트 (경로 그리기 종료 등)
+	map.on('dblclick', function(e){
+		if(drawState.mode === 'polyline') {
+			finishPolyline(map);
+		}
+	});
+	
+	// 지도 컴포넌트 등록
+	app.lookup("shl1").registerComponent("leafletMap", map);
+	
+	// 설정값 저장
+	app.lookup("shl1").registerComponent("mapConfig", {
+		dataValues: vaDataValues,
+		colorScheme: vsColorScheme,
+		customColors: vaCustomColors,
+		enableDrilldown: vbEnableDrilldown,
+		enableDongDrilldown: vbEnableDongDrilldown,
+		adminLevel: vsAdminLevel,
+		apiUrl: vsApiUrl,
+		labels: voLabels,
+		customTooltips: voCustomTooltips,
+		hoverColors: voHoverColors
+	});
+	
+	// API 데이터 로드
+	loadMapData(map, vsApiUrl, vsAdminLevel, vbShowTooltip);
+	
+	// 마커 추가
+	if (voMarkers && voMarkers.length > 0) {
+		addMarkers(map, voMarkers);
+	}
+	
+	// 경로 추가
+	if (voPolylines && voPolylines.length > 0) {
+		addPolylines(map, voPolylines);
+	}
+	
+	// 커스텀 이미지 추가
+	if (voCustomImages && voCustomImages.length > 0) {
+		addCustomImages(map, voCustomImages);
+	}
+	
+	// 패널 추가
+	if (voPanels && voPanels.length > 0) {
+		addPanels(map, voPanels);
+	}
+	
+	// 스파크 차트 추가
+	if (voSparkCharts && voSparkCharts.length > 0) {
+		addSparkCharts(map, voSparkCharts);
+	}
+}
+
+/**
+ * API에서 지도 데이터를 로드합니다.
+ */
+function loadMapData(map, apiUrl, adminLevel, showTooltip, skipSend) {
+	var endpoint = adminLevel === 'sido' ? '/api/map/sido.do' : '/api/map/sigungu.do';
+	var url = apiUrl + endpoint;
+	
+	showLoading(true);
+	
+	var sms1 = app.lookup("sms1");
+	
+	if (skipSend) {
+		showLoading(false);
+		return;
+	}
+	
+	sms1.removeAllEventListeners("submit-success");
+	sms1.removeAllEventListeners("submit-error");
+	
+	var successHandler = function(e) {
+		var sub = e.control;
+		
+		if (!sub.xhr.responseText) {
+			showLoading(false);
+			return;
+		}
+		
+		try {
+			var data = JSON.parse(sub.xhr.responseText);
+			
+			if (data.error) {
+				throw new Error(data.error);
+			}
+			
+			if (data.type !== 'FeatureCollection' || !data.features || data.features.length === 0) {
+				throw new Error('유효한 GeoJSON 데이터가 없습니다.');
+			}
+			
+			renderGeoJson(map, data, showTooltip);
+			showLoading(false);
+			
+		} catch (error) {
+			console.error('데이터 로드 실패:', error);
+			alert('지도 데이터를 불러올 수 없습니다.\n' + error.message);
+			showLoading(false);
+		}
+	};
+	
+	var errorHandler = function(e) {
+		console.error('API 호출 실패');
+		alert('API 호출에 실패했습니다.');
+		showLoading(false);
+	};
+	
+	sms1.addEventListener("submit-success", successHandler);
+	sms1.addEventListener("submit-error", errorHandler);
+	
+	sms1.send();
+}
+
+/**
+ * GeoJSON 데이터를 지도에 렌더링합니다.
+ */
+function renderGeoJson(map, geoJsonData, showTooltip) {
+	var shl1 = app.lookup("shl1");
+	var mapConfig = shl1.getComponent("mapConfig");
+	var dataValues = mapConfig.dataValues || [];
+	var colorScheme = mapConfig.colorScheme || "blue";
+	var customColors = mapConfig.customColors;
+	var enableDrilldown = mapConfig.enableDrilldown;
+	var adminLevel = mapConfig.adminLevel;
+	var labels = mapConfig.labels || [];
+	var customTooltips = mapConfig.customTooltips || {};
+	var hoverColors = mapConfig.hoverColors || {};
+
+	// 데이터 맵 생성
+	var dataMap = {};
+	var minValue = Infinity;
+	var maxValue = -Infinity;
+
+	dataValues.forEach(function(item) {
+		dataMap[item.code] = item;
+		if (item.value < minValue) minValue = item.value;
+		if (item.value > maxValue) maxValue = item.value;
+	});
+
+	// 라벨 맵 생성
+	var labelMap = {};
+	labels.forEach(function(item) {
+		labelMap[item.code] = item;
+	});
+
+	// 색상 스키마
+	var colorSchemes = {
+		blue: ['#deebf7', '#9ecae1', '#4292c6', '#08519c', '#08306b'],
+		red: ['#fee5d9', '#fcae91', '#fb6a4a', '#de2d26', '#a50f15'],
+		green: ['#edf8e9', '#bae4b3', '#74c476', '#31a354', '#006d2c'],
+		purple: ['#f2f0f7', '#cbc9e2', '#9e9ac8', '#756bb1', '#54278f']
+	};
+
+	var colors = customColors || colorSchemes[colorScheme] || colorSchemes.blue;
+
+	// 값에 따른 색상 계산
+	function getColorForValue(value) {
+		if (minValue === maxValue) {
+			return colors[2];
+		}
+		var ratio = (value - minValue) / (maxValue - minValue);
+		var index = Math.floor(ratio * (colors.length - 1));
+		return colors[Math.min(index, colors.length - 1)];
+	}
+
+	// 스타일 함수
+	function style(feature) {
+		var props = feature.properties;
+		var code = props.ctprvn_cd || props.sig_cd || props.emd_cd;
+		var dataItem = dataMap[code];
+
+		var fillColor = '#3498db';
+		if (dataItem && dataItem.value !== undefined) {
+			fillColor = getColorForValue(dataItem.value);
+		} else if (dataItem && dataItem.color) {
+			fillColor = dataItem.color;
+		}
+
+		return {
+			fillColor: fillColor,
+			weight: 2,
+			opacity: 1,
+			color: '#ffffff',
+			fillOpacity: 0.7
+		};
+	}
+
+	var geoJsonLayer;
+
+	// 각 Feature에 이벤트 바인딩
+	function onEachFeature(feature, layer) {
+		// 원본 스타일 저장
+		feature.originalStyle = style(feature);
+
+		// 지역 상태 초기화
+		feature._state = {
+			regionColor: null,
+			tooltipBg: "#333333",
+			tooltipColor: "#ffffff",
+			tooltipText: null
+		};
+
+		var props = feature.properties;
+		var code = props.ctprvn_cd || props.sig_cd || props.emd_cd;
+		var name = props.ctp_kor_nm || props.sig_kor_nm || props.emd_kor_nm ||
+			props.adm_nm || props.full_nm || props.ctp_eng_nm || '알 수 없음';
+		var dataItem = dataMap[code];
+
+		// 마우스 오버 이벤트
+		layer.on('mouseover', function(e) {
+			// [CHECK] 그리기 모드일 때는 호버 효과 무시
+			if (drawState.mode) return;
+
+			var layer = e.target;
+			var props = layer.feature.properties;
+			var code = props.ctprvn_cd || props.sig_cd || props.emd_cd;
+
+			var hoverColor = hoverColors[code] || '#2c3e50';
+			var hoverFillColor = hoverColors[code] ? hoverColors[code] : null;
+
+			var hoverStyle = {
+				weight: 4,
+				color: hoverColor,
+				fillOpacity: 0.9
+			};
+
+			if (hoverFillColor) {
+				hoverStyle.fillColor = hoverFillColor;
+			}
+
+			layer.setStyle(hoverStyle);
+			layer.bringToFront();
+		});
+
+		// 마우스 아웃 이벤트
+		layer.on('mouseout', function(e) {
+			// [CHECK] 그리기 모드일 때는 무시
+			if (drawState.mode) return;
+
+			var layer = e.target;
+			var state = layer.feature._state;
+			var props = layer.feature.properties;
+			var code = props.ctprvn_cd || props.sig_cd || props.emd_cd;
+
+			var baseStyle = layer.feature.originalStyle || {};
+
+			// 사용자 지정 색상 확인
+			var customColor = state.regionColor;
+
+			if (!customColor) {
+				for (var i = 0; i < dataValues.length; i++) {
+					if (dataValues[i].code === code && dataValues[i].color) {
+						customColor = dataValues[i].color;
+						break;
+					}
+				}
+			}
+
+			layer.setStyle({
+				weight: baseStyle.weight || 2,
+				color: baseStyle.color || "#ffffff",
+				opacity: baseStyle.opacity || 1,
+				fillOpacity: baseStyle.fillOpacity || 0.7,
+				fillColor: customColor || baseStyle.fillColor
+			});
+		});
+
+		// 클릭 이벤트
+		layer.on('click', function(e) {
+			// [NEW] 그리기 모드 활성화 시: 팝업 차단 및 그리기 함수 호출
+			if (drawState.mode) {
+				L.DomEvent.stopPropagation(e); // 이벤트 전파 중단
+				handleMapClick(map, e); // 그리기 함수 강제 호출
+				
+				// 혹시 팝업이 열리려 하면 닫아버림
+				setTimeout(function() {
+					layer.closePopup();
+				}, 0);
+				return;
+			}
+
+			// 동 레벨이거나 드릴다운 비활성화 시 -> 팝업 표시 (아래에서 bindPopup으로 처리)
+			if (adminLevel === 'dong' || !enableDrilldown) {
+				return;
+			}
+
+			// 시도 -> 시군구 드릴다운
+			if (adminLevel === 'sido' && props.ctprvn_cd) {
+				drilldownToSigungu(map, props.ctprvn_cd, layer.getBounds());
+				return;
+			}
+
+			// 시군구 -> 읍면동 드릴다운
+			if (adminLevel === 'sigungu' && props.sig_cd && mapConfig.enableDongDrilldown) {
+				drilldownToDong(map, props.sig_cd, layer.getBounds());
+				return;
+			}
+
+			// 그 외의 경우 줌
+			map.fitBounds(layer.getBounds(), {
+				padding: [50, 50],
+				maxZoom: 15
+			});
+
+			// 커스텀 클릭 이벤트
+			if (typeof onMapRegionClick === 'function') {
+				onMapRegionClick({
+					code: code,
+					name: name,
+					properties: props,
+					bounds: layer.getBounds()
+				});
+			}
+		});
+
+		// 툴팁 설정
+		if (showTooltip) {
+			layer.bindTooltip(function() {
+				return buildTooltipHTML(layer, name, dataItem);
+			}, {
+				permanent: false,
+				direction: 'center',
+				className: 'custom-tooltip'
+			});
+		}
+
+		// 라벨 추가
+		var labelItem = labelMap[code];
+		if (labelItem && labelItem.label) {
+			var bounds = layer.getBounds();
+			var center = bounds.getCenter();
+
+			var labelIcon = L.divIcon({
+				className: 'region-label',
+				html: '<div style="' +
+					'font-size: ' + (labelItem.fontSize || '12px') + ';' +
+					'color: ' + (labelItem.color || '#333') + ';' +
+					'font-weight: bold;' +
+					'text-align: center;' +
+					'white-space: nowrap;' +
+					'text-shadow: 1px 1px 2px white, -1px -1px 2px white;' +
+					'pointer-events: none;' +
+					'">' + labelItem.label + '</div>',
+				iconSize: null
+			});
+
+			var labelMarker = L.marker(center, {
+				icon: labelIcon,
+				interactive: false,
+				zIndexOffset: 1000
+			});
+			labelMarker.addTo(map);
+
+			if (!shl1.getComponent("labelMarkers")) {
+				shl1.registerComponent("labelMarkers", []);
+			}
+			shl1.getComponent("labelMarkers").push(labelMarker);
+		}
+
+		// 팝업 설정 (동 레벨이거나 드릴다운 비활성화 시에만)
+		if (adminLevel === 'dong' || !enableDrilldown) {
+			var popupHTML = buildPopupHTML(name, code, dataItem, feature._state);
+			layer.bindPopup(popupHTML, {
+				maxWidth: 300,
+				className: 'custom-popup'
+			});
+
+			// [NEW] 팝업 열릴 때 그리기 모드 체크
+			layer.on('popupopen', function(e) {
+				if (drawState.mode) {
+					// 그리기 모드면 팝업 즉시 제거 (편집창 안 뜨게)
+					e.popup.remove();
+				} else {
+					// 그리기 모드가 아니면 정상적으로 이벤트 핸들러 부착
+					attachPopupEventHandlers(e.popup, layer, name, dataItem);
+				}
+			});
+		}
+	}
+
+	// GeoJSON 레이어 추가
+	geoJsonLayer = L.geoJSON(geoJsonData, {
+		style: style,
+		onEachFeature: onEachFeature
+	}).addTo(map);
+
+	// 지도 범위 맞추기
+	if (!mapConfig.targetBounds && geoJsonLayer.getBounds().isValid()) {
+		map.fitBounds(geoJsonLayer.getBounds());
+	}
+
+	app.lookup("shl1").registerComponent("geoJsonLayer", geoJsonLayer);
+}
+
+/**
+ * 팝업 HTML 생성
+ */
+function buildPopupHTML(name, code, dataItem, state) {
+	var html = '<div style="padding: 10px; min-width: 250px;">';
+	
+	// 헤더
+	html += '<h4 style="margin: 0 0 15px 0; border-bottom: 2px solid #3498db; padding-bottom: 8px; color: #2c3e50;">';
+	html += name + '</h4>';
+	
+	// 기본 정보
+	html += '<div style="margin-bottom: 15px;">';
+	html += '<div style="margin: 5px 0;"><strong>코드:</strong> ' + code + '</div>';
+	if (dataItem) {
+		html += '<div style="margin: 5px 0;"><strong>' + dataItem.label + ':</strong> ' + dataItem.value + '</div>';
+	}
+	html += '</div>';
+	
+	// 구분선
+	html += '<hr style="border: none; border-top: 1px solid #ddd; margin: 15px 0;">';
+	
+	// 스타일 편집 섹션
+	html += '<div style="margin-bottom: 10px;"><strong>🎨 스타일 편집</strong></div>';
+	
+	// 지역 색상
+	html += '<div style="margin: 10px 0;">';
+	html += '<label style="display: block; margin-bottom: 5px; font-size: 12px; color: #555;">지역 색상</label>';
+	html += '<input type="color" class="region-color" style="width: 100%; height: 35px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer;">';
+	html += '</div>';
+	
+	// 툴팁 배경색
+	html += '<div style="margin: 10px 0;">';
+	html += '<label style="display: block; margin-bottom: 5px; font-size: 12px; color: #555;">툴팁 배경색</label>';
+	html += '<input type="color" class="tooltip-bg" value="' + state.tooltipBg + '" style="width: 100%; height: 35px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer;">';
+	html += '</div>';
+	
+	// 툴팁 글자색
+	html += '<div style="margin: 10px 0;">';
+	html += '<label style="display: block; margin-bottom: 5px; font-size: 12px; color: #555;">툴팁 글자색</label>';
+	html += '<input type="color" class="tooltip-color" value="' + state.tooltipColor + '" style="width: 100%; height: 35px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer;">';
+	html += '</div>';
+	
+	// 툴팁 텍스트
+	html += '<div style="margin: 10px 0;">';
+	html += '<label style="display: block; margin-bottom: 5px; font-size: 12px; color: #555;">툴팁 텍스트 (비워두면 기본값)</label>';
+	html += '<textarea class="tooltip-text" placeholder="' + name + '" style="width: 100%; height: 60px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; resize: vertical;"></textarea>';
+	html += '</div>';
+	
+	// 적용 버튼
+	html += '<button class="apply-style" style="width: 100%; padding: 10px; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 10px;">';
+	html += '✓ 적용</button>';
+	
+	// 초기화 버튼
+	html += '<button class="reset-style" style="width: 100%; padding: 8px; background: #95a5a6; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 5px;">';
+	html += '초기화</button>';
+	
+	html += '</div>';
+	
+	return html;
+}
+
+/**
+ * 팝업 이벤트 핸들러 등록
+ */
+function attachPopupEventHandlers(popup, layer, name, dataItem) {
+	var popupEl = popup.getElement();
+	if (!popupEl) return;
+	
+	var state = layer.feature._state;
+	
+	// 현재 상태값으로 입력 필드 초기화
+	var regionColorInput = popupEl.querySelector('.region-color');
+	var tooltipBgInput = popupEl.querySelector('.tooltip-bg');
+	var tooltipColorInput = popupEl.querySelector('.tooltip-color');
+	var tooltipTextArea = popupEl.querySelector('.tooltip-text');
+	
+	if (state.regionColor) {
+		regionColorInput.value = state.regionColor;
+	}
+	tooltipBgInput.value = state.tooltipBg;
+	tooltipColorInput.value = state.tooltipColor;
+	if (state.tooltipText) {
+		tooltipTextArea.value = state.tooltipText;
+	}
+	
+	// 적용 버튼
+	popupEl.querySelector('.apply-style').onclick = function() {
+		var newRegionColor = regionColorInput.value;
+		state.regionColor = newRegionColor || null;
+		state.tooltipBg = tooltipBgInput.value;
+		state.tooltipColor = tooltipColorInput.value;
+		state.tooltipText = tooltipTextArea.value.trim() || null;
+		
+		// 지역 스타일 반영
+		applyFeatureStyle(layer);
+		
+		// 툴팁 갱신
+		layer.unbindTooltip();
+		layer.bindTooltip(function() {
+			return buildTooltipHTML(layer, name, dataItem);
+		}, {
+			permanent: false,
+			direction: 'center',
+			className: 'custom-tooltip'
+		});
+		
+		popup.remove();
+		alert('스타일이 적용되었습니다!');
+	};
+	
+	// 초기화 버튼
+	popupEl.querySelector('.reset-style').onclick = function() {
+		state.regionColor = null;
+		state.tooltipBg = '#333333';
+		state.tooltipColor = '#ffffff';
+		state.tooltipText = null;
+		
+		regionColorInput.value = '#000000';
+		tooltipBgInput.value = '#333333';
+		tooltipColorInput.value = '#ffffff';
+		tooltipTextArea.value = '';
+		
+		applyFeatureStyle(layer);
+		
+		layer.unbindTooltip();
+		layer.bindTooltip(function() {
+			return buildTooltipHTML(layer, name, dataItem);
+		}, {
+			permanent: false,
+			direction: 'center',
+			className: 'custom-tooltip'
+		});
+		
+		alert('스타일이 초기화되었습니다!');
+	};
+}
+
+/**
+ * 툴팁 HTML 생성
+ */
+function buildTooltipHTML(layer, name, dataItem) {
+	var state = layer.feature._state;
+	
+	if (state.tooltipText) {
+		return '<div style="' +
+			'background: ' + state.tooltipBg + ';' +
+			'color: ' + state.tooltipColor + ';' +
+			'padding: 8px 12px;' +
+			'border-radius: 4px;' +
+			'box-shadow: 0 2px 5px rgba(0,0,0,0.3);' +
+			'">' + state.tooltipText + '</div>';
+	}
+	
+	var html = '<div style="' +
+		'background: ' + state.tooltipBg + ';' +
+		'color: ' + state.tooltipColor + ';' +
+		'padding: 8px 12px;' +
+		'border-radius: 4px;' +
+		'box-shadow: 0 2px 5px rgba(0,0,0,0.3);' +
+		'">';
+	
+	html += '<strong>' + name + '</strong>';
+	
+	if (dataItem) {
+		html += '<br>' + dataItem.label + ': ' + dataItem.value;
+	}
+	
+	html += '</div>';
+	
+	return html;
+}
+
+/**
+ * Feature 스타일 적용
+ */
+function applyFeatureStyle(layer) {
+	var state = layer.feature._state;
+	var base = layer.feature.originalStyle || {};
+	
+	layer.setStyle({
+		weight: base.weight || 2,
+		color: base.color || "#ffffff",
+		opacity: base.opacity || 1,
+		fillOpacity: base.fillOpacity || 0.7,
+		fillColor: state.regionColor || base.fillColor
+	});
+}
+
+/**
+ * 범례 컨트롤 추가
+ */
+function addLegendControl(map, dataValues, colorScheme, customColors) {
+	var legend = L.control({
+		position: 'bottomright'
+	});
+	
+	legend.onAdd = function() {
+		var div = L.DomUtil.create('div', 'map-legend');
+		div.style.background = 'white';
+		div.style.padding = '10px';
+		div.style.borderRadius = '5px';
+		div.style.boxShadow = '0 2px 5px rgba(0,0,0,0.2)';
+		div.style.fontSize = '12px';
+		
+		var html = '<h4 style="margin: 0 0 10px 0; font-size: 14px;">범례</h4>';
+		
+		if (dataValues && dataValues.length > 0) {
+			var values = dataValues.map(function(item) {
+				return item.value;
+			});
+			var minValue = Math.min.apply(null, values);
+			var maxValue = Math.max.apply(null, values);
+			
+			var colorSchemes = {
+				blue: ['#deebf7', '#9ecae1', '#4292c6', '#08519c', '#08306b'],
+				red: ['#fee5d9', '#fcae91', '#fb6a4a', '#de2d26', '#a50f15'],
+				green: ['#edf8e9', '#bae4b3', '#74c476', '#31a354', '#006d2c'],
+				purple: ['#f2f0f7', '#cbc9e2', '#9e9ac8', '#756bb1', '#54278f']
+			};
+			var colors = customColors || colorSchemes[colorScheme] || colorSchemes.blue;
+			var step = (maxValue - minValue) / (colors.length - 1);
+			
+			for (var i = 0; i < colors.length; i++) {
+				var from = minValue + (step * i);
+				var to = minValue + (step * (i + 1));
+				
+				html += '<div style="display: flex; align-items: center; margin: 5px 0;">' +
+					'<div style="width: 30px; height: 20px; background: ' + colors[i] + '; margin-right: 8px; border: 1px solid #ddd;"></div>' +
+					'<span>' + Math.round(from) + ' - ' + Math.round(to) + '</span></div>';
+			}
+		} else {
+			html += '<div style="display: flex; align-items: center; margin: 5px 0;">' +
+				'<div style="width: 30px; height: 20px; background: #3498db; margin-right: 8px;"></div>' +
+				'<span>행정구역</span></div>';
+		}
+		
+		div.innerHTML = html;
+		return div;
+	};
+	
+	legend.addTo(map);
+}
+
+/**
+ * 마커 추가
+ */
+function addMarkers(map, markers) {
+	var markerCluster = app.lookup("shl1").getComponent("markerCluster");
+	if (!markerCluster) {
+		markerCluster = L.markerClusterGroup();
+		app.lookup("shl1").registerComponent("markerCluster", markerCluster);
+		map.addLayer(markerCluster);
+	}
+
+	markers.forEach(function(markerData) {
+		var marker = L.marker([markerData.lat, markerData.lng]);
+		if (markerData.icon) {
+			var customIcon = L.icon({
+				iconUrl: markerData.icon,
+				iconSize: [32, 32],
+				iconAnchor: [16, 32],
+				popupAnchor: [0, -32]
+			});
+			marker.setIcon(customIcon);
+		}
+		
+		if (markerData.popup) {
+			marker.bindPopup(markerData.popup);
+		}
+		
+		if (markerData.label) {
+			marker.bindTooltip(markerData.label, {
+				permanent: false,
+				direction: 'top'
+			});
+		}
+		
+		markerCluster.addLayer(marker);
+	});
+}
+
+/**
+ * 경로 추가
+ */
+function addPolylines(map, polylines) {
+	var polylineGroup = app.lookup("shl1").getComponent("polylineGroup");
+	if (!polylineGroup) {
+		polylineGroup = L.layerGroup();
+		app.lookup("shl1").registerComponent("polylineGroup", polylineGroup);
+		map.addLayer(polylineGroup);
+	}
+
+	polylines.forEach(function(lineData) {
+		var polyline = L.polyline(lineData.points, {
+			color: lineData.color || '#3498db',
+			weight: lineData.weight || 3,
+			opacity: lineData.opacity || 0.7
+		});
+		if (lineData.popup) {
+			polyline.bindPopup(lineData.popup);
+		}
+		
+		polylineGroup.addLayer(polyline);
+	});
+}
+
+/**
+ * 커스텀 이미지 추가
+ */
+function addCustomImages(map, images) {
+	var imageGroup = app.lookup("shl1").getComponent("imageGroup");
+	if (!imageGroup) {
+		imageGroup = L.layerGroup();
+		app.lookup("shl1").registerComponent("imageGroup", imageGroup);
+		map.addLayer(imageGroup);
+	}
+
+	images.forEach(function(imgData) {
+		var icon = L.icon({
+			iconUrl: imgData.url,
+			iconSize: imgData.size || [50, 50],
+			iconAnchor: [(imgData.size ? imgData.size[0] : 50) / 2, (imgData.size ? imgData.size[1] : 50) / 2]
+		});
+		var marker = L.marker([imgData.lat, imgData.lng], {
+			icon: icon
+		});
+		
+		if (imgData.popup) {
+			marker.bindPopup(imgData.popup);
+		}
+		
+		imageGroup.addLayer(marker);
+	});
+}
+
+/**
+ * 패널 추가
+ */
+function addPanels(map, panels) {
+	var panelGroup = app.lookup("shl1").getComponent("panelGroup");
+	if (!panelGroup) {
+		panelGroup = L.layerGroup();
+		app.lookup("shl1").registerComponent("panelGroup", panelGroup);
+		map.addLayer(panelGroup);
+	}
+
+	panels.forEach(function(panelData) {
+		var panelHtml = '<div style="' +
+			'background: white;' +
+			'padding: 10px;' +
+			'border-radius: 5px;' +
+			'box-shadow: 0 2px 10px rgba(0,0,0,0.3);' +
+			'min-width: ' + (panelData.width || '200px') + ';' +
+			'max-width: ' + (panelData.maxWidth || '300px') + ';' +
+			'max-height: ' + (panelData.height || 'auto') + ';' +
+			'overflow-y: auto;' +
+			'">';
+		if (panelData.title) {
+			panelHtml += '<h4 style="margin: 0 0 10px 0; border-bottom: 2px solid #3498db; padding-bottom: 5px;">' +
+				panelData.title + '</h4>';
+		}
+		
+		panelHtml += '<div>' + panelData.content + '</div>';
+		panelHtml += '</div>';
+		
+		var panelIcon = L.divIcon({
+			className: 'custom-panel',
+			html: panelHtml,
+			iconSize: null
+		});
+		
+		var panelMarker = L.marker([panelData.lat, panelData.lng], {
+			icon: panelIcon,
+			interactive: panelData.interactive !== false
+		});
+		
+		if (panelData.popup) {
+			panelMarker.bindPopup(panelData.popup);
+		}
+		
+		panelGroup.addLayer(panelMarker);
+	});
+}
+
+/**
+ * 스파크 차트 추가
+ */
+function addSparkCharts(map, sparkCharts) {
+	var chartGroup = app.lookup("shl1").getComponent("chartGroup");
+	if (!chartGroup) {
+		chartGroup = L.layerGroup();
+		app.lookup("shl1").registerComponent("chartGroup", chartGroup);
+		map.addLayer(chartGroup);
+	}
+
+	sparkCharts.forEach(function(chartData) {
+		if (!chartData.data || chartData.data.length === 0) return;
+		var width = chartData.width || 80;
+		var height = chartData.height || 30;
+		var color = chartData.color || '#3498db';
+		var data = chartData.data;
+		
+		var min = Math.min.apply(null, data);
+		var max = Math.max.apply(null, data);
+		var range = max - min || 1;
+		
+		var points = [];
+		var step = width / (data.length - 1);
+		
+		for (var i = 0; i < data.length; i++) {
+			var x = i * step;
+			var y = height - ((data[i] - min) / range * height);
+			points.push(x + ',' + y);
+		}
+		
+		var polyline = points.join(' ');
+		
+		var svg = '<svg width="' + width + '" height="' + height + '" style="background: white; border-radius: 3px; padding: 2px;">' +
+			'<polyline points="' + polyline + '" ' +
+			'style="fill: none; stroke: ' + color + '; stroke-width: 2;" />' +
+			'</svg>';
+		
+		var chartIcon = L.divIcon({
+			className: 'spark-chart',
+			html: svg,
+			iconSize: [width, height],
+			iconAnchor: [width / 2, height / 2]
+		});
+		
+		var chartMarker = L.marker([chartData.lat, chartData.lng], {
+			icon: chartIcon,
+			interactive: true
+		});
+		
+		if (chartData.label) {
+			var tooltipHtml = '<div style="padding: 5px;"><strong>' + chartData.label + '</strong><br>';
+			tooltipHtml += '최소: ' + min + ', 최대: ' + max + '<br>';
+			tooltipHtml += '현재: ' + data[data.length - 1] + '</div>';
+			
+			chartMarker.bindTooltip(tooltipHtml);
+		}
+		
+		if (chartData.popup) {
+			chartMarker.bindPopup(chartData.popup);
+		}
+		
+		chartGroup.addLayer(chartMarker);
+	});
+}
+
+/**
+ * 시군구로 드릴다운
+ */
+function drilldownToSigungu(map, sidoCode, targetBounds) {
+	var geoJsonLayer = app.lookup("shl1").getComponent("geoJsonLayer");
+	if (geoJsonLayer) {
+		map.removeLayer(geoJsonLayer);
+	}
+	showLoading(true);
+	var url = '../api/map/sigungu.do?sido=' + sidoCode;
+	var sms1 = app.lookup("sms1");
+	try {
+		if (sms1.xhr && sms1.xhr.readyState !== 4) {
+			sms1.xhr.abort();
+		}
+	} catch (e) {
+		console.log('Previous request abort failed:', e);
+	}
+	sms1.removeAllEventListeners("submit-success");
+	sms1.removeAllEventListeners("submit-error");
+	sms1.action = url;
+	var successHandler = function(e) {
+		var sub = e.control;
+		if (!sub.xhr.responseText) {
+			showLoading(false);
+			return;
+		}
+		
+		try {
+			var data = JSON.parse(sub.xhr.responseText);
+			
+			if (data.error) {
+				throw new Error(data.error);
+			}
+			
+			if (data.type !== 'FeatureCollection' || !data.features || data.features.length === 0) {
+				throw new Error('유효한 GeoJSON 데이터가 없습니다.');
+			}
+			
+			var mapConfig = app.lookup("shl1").getComponent("mapConfig");
+			mapConfig.adminLevel = 'sigungu';
+			mapConfig.parentSidoCode = sidoCode;
+			mapConfig.targetBounds = targetBounds;
+			
+			addBackButton(map, 'sido');
+			
+			renderGeoJson(map, data, true);
+			
+			if (targetBounds) {
+				setTimeout(function() {
+					map.fitBounds(targetBounds, {
+						padding: [50, 50],
+						maxZoom: 12
+					});
+				}, 100);
+			}
+			
+			showLoading(false);
+			
+		} catch (error) {
+			console.error('시군구 데이터 로드 실패:', error);
+			alert('시군구 데이터를 불러올 수 없습니다.\n' + error.message);
+			showLoading(false);
+			reloadSidoData(map);
+		}
+	};
+	var errorHandler = function(e) {
+		console.error('API 호출 실패');
+		alert('API 호출에 실패했습니다.');
+		showLoading(false);
+		reloadSidoData(map);
+	};
+	sms1.addEventListener("submit-success", successHandler);
+	sms1.addEventListener("submit-error", errorHandler);
+	sms1.send();
+}
+
+/**
+ * 동으로 드릴다운
+ */
+function drilldownToDong(map, sigunguCode, targetBounds) {
+	var geoJsonLayer = app.lookup("shl1").getComponent("geoJsonLayer");
+	if (geoJsonLayer) {
+		map.removeLayer(geoJsonLayer);
+	}
+	showLoading(true);
+	var url = '../api/map/dong.do?sigungu=' + sigunguCode;
+	var sms1 = app.lookup("sms1");
+	try {
+		if (sms1.xhr && sms1.xhr.readyState !== 4) {
+			sms1.xhr.abort();
+		}
+	} catch (e) {
+		console.log('Previous request abort failed:', e);
+	}
+	sms1.removeAllEventListeners("submit-success");
+	sms1.removeAllEventListeners("submit-error");
+	sms1.action = url;
+	var successHandler = function(e) {
+		var sub = e.control;
+		if (!sub.xhr.responseText) {
+			showLoading(false);
+			return;
+		}
+		
+		try {
+			var data = JSON.parse(sub.xhr.responseText);
+			
+			if (data.error) {
+				throw new Error(data.error);
+			}
+			
+			if (data.type !== 'FeatureCollection' || !data.features || data.features.length === 0) {
+				throw new Error('유효한 GeoJSON 데이터가 없습니다.');
+			}
+			
+			var mapConfig = app.lookup("shl1").getComponent("mapConfig");
+			mapConfig.adminLevel = 'dong';
+			mapConfig.parentSigunguCode = sigunguCode;
+			mapConfig.targetBounds = targetBounds;
+			
+			addBackButton(map, 'sigungu');
+			
+			renderGeoJson(map, data, true);
+			
+			if (targetBounds) {
+				setTimeout(function() {
+					map.fitBounds(targetBounds, {
+						padding: [50, 50],
+						maxZoom: 14
+					});
+				}, 100);
+			}
+			
+			showLoading(false);
+			
+		} catch (error) {
+			console.error('동 데이터 로드 실패:', error);
+			alert('동 데이터를 불러올 수 없습니다.\n' + error.message);
+			showLoading(false);
+			
+			var mapConfig = app.lookup("shl1").getComponent("mapConfig");
+			if (mapConfig.parentSidoCode) {
+				drilldownToSigungu(map, mapConfig.parentSidoCode);
+			} else {
+				reloadSidoData(map);
+			}
+		}
+	};
+	var errorHandler = function(e) {
+		console.error('동 API 호출 실패');
+		alert('동 API 호출에 실패했습니다.');
+		showLoading(false);
+		var mapConfig = app.lookup("shl1").getComponent("mapConfig");
+		if (mapConfig.parentSidoCode) {
+			drilldownToSigungu(map, mapConfig.parentSidoCode);
+		} else {
+			reloadSidoData(map);
+		}
+	};
+	sms1.addEventListener("submit-success", successHandler);
+	sms1.addEventListener("submit-error", errorHandler);
+	sms1.send();
+}
+
+/**
+ * 로딩 표시
+ */
+function showLoading(show) {
+	var shl1 = app.lookup("shl1");
+	if (!shl1) return;
+	var loadingDiv = shl1.getComponent("loadingDiv");
+	if (show) {
+		if (!loadingDiv) {
+			var voContent = shl1.getComponent("voContent");
+			loadingDiv = document.createElement("div");
+			loadingDiv.style.position = "absolute";
+			loadingDiv.style.top = "0";
+			loadingDiv.style.left = "0";
+			loadingDiv.style.right = "0";
+			loadingDiv.style.bottom = "0";
+			loadingDiv.style.background = "rgba(0,0,0,0.5)";
+			loadingDiv.style.display = "flex";
+			loadingDiv.style.justifyContent = "center";
+			loadingDiv.style.alignItems = "center";
+			loadingDiv.style.zIndex = "9999";
+			loadingDiv.innerHTML = '<div style="background: white; padding: 20px; border-radius: 5px;">로딩 중...</div>';
+			voContent.appendChild(loadingDiv);
+			shl1.registerComponent("loadingDiv", loadingDiv);
+		}
+		loadingDiv.style.display = "flex";
+	} else {
+		if (loadingDiv) {
+			loadingDiv.style.display = "none";
+		}
+	}
+}
+
+/**
+ * 공개 API 함수들
+ */
+function setZoomLevel(level) {
+	var map = app.lookup("shl1").getComponent("leafletMap");
+	if (map) {
+		map.setZoom(level);
+	}
+}
+
+function setMapCenter(lat, lng, zoom) {
+	var map = app.lookup("shl1").getComponent("leafletMap");
+	if (map) {
+		map.setView([lat, lng], zoom || map.getZoom());
+	}
+}
+
+function focusOnRegion(regionCode) {
+	var geoJsonLayer = app.lookup("shl1").getComponent("geoJsonLayer");
+	if (geoJsonLayer) {
+		geoJsonLayer.eachLayer(function(layer) {
+			var props = layer.feature.properties;
+			var code = props.ctprvn_cd || props.sig_cd;
+			if (code === regionCode) {
+				var bounds = layer.getBounds();
+				var map = app.lookup("shl1").getComponent("leafletMap");
+				map.fitBounds(bounds);
+				layer.openPopup();
+			}
+		});
+	}
+}
+
+function onMapRegionClick(regionData) {
+	console.log("지역(동) 클릭: " + regionData);
+	openTooltipEditor(regionData);
+}
+
+function openTooltipEditor(regionData) {
+	removeTooltipEditor();
+	var editor = document.createElement("div");
+	editor.id = "tooltip-editor";
+	editor.style.position = "absolute";
+	editor.style.top = "20px";
+	editor.style.right = "20px";
+	editor.style.width = "260px";
+	editor.style.background = "#fff";
+	editor.style.borderRadius = "8px";
+	editor.style.boxShadow = "0 4px 12px rgba(0,0,0,0.3)";
+	editor.style.padding = "12px";
+	editor.style.zIndex = "10000";
+	editor.style.fontSize = "13px";
+	
+	editor.innerHTML =
+		'<h4 style="margin:0 0 10px 0;">' + regionData.name + '</h4>' +
+		'<label>툴팁 내용</label>' +
+		'<textarea id="tt-text" style="width:100%; height:60px;"></textarea>' +
+		'<label>배경색</label>' +
+		'<input type="color" id="tt-bg" value="#333333"/>' +
+		'<label>글자색</label>' +
+		'<input type="color" id="tt-color" value="#ffffff"/>' +
+		'<label>지역 색상</label>' +
+		'<input type="color" id="region-color"/>' +
+		'<div style="margin-top:10px; text-align:right;">' +
+		'<button id="tt-save">적용</button>' +
+		'<button id="tt-close">닫기</button>' +
+		'</div>';
+	
+	document.body.appendChild(editor);
+	
+	editor.querySelector("#tt-save").onclick = function() {
+		applyTooltipChange(regionData);
+	};
+	
+	editor.querySelector("#tt-close").onclick = removeTooltipEditor;
+}
+
+function removeTooltipEditor() {
+	var el = document.getElementById("tooltip-editor");
+	if (el) el.remove();
+}
+
+function applyTooltipChange(regionData) {
+	var text = document.getElementById("tt-text").value;
+	var bg = document.getElementById("tt-bg").value;
+	var color = document.getElementById("tt-color").value;
+	var regionColor = document.getElementById("region-color").value;
+	var tooltipHTML =
+		'<div style="' +
+		'background:' + bg + ';' +
+		'color:' + color + ';' +
+		'padding:8px 10px;' +
+		'border-radius:6px;' +
+		'font-size:12px;' +
+		'box-shadow:0 2px 6px rgba(0,0,0,0.3);' +
+		'">' +
+		'<strong>' + regionData.name + '</strong><br/>' +
+		text +
+		'</div>';
+	
+	setCustomTooltip(regionData.code, tooltipHTML);
+	
+	if (regionColor) {
+		updateRegionColor(regionData.code, regionColor);
+	}
+	
+	removeTooltipEditor();
+}
+
+function resetMapView() {
+	var map = app.lookup("shl1").getComponent("leafletMap");
+	if (map) {
+		map.setView([36.5, 127.5], 7);
+	}
+}
+
+function updateRegionColor(regionCode, color) {
+	var shl1 = app.lookup("shl1");
+	var mapConfig = shl1.getComponent("mapConfig");
+	var dataValues = mapConfig.dataValues || [];
+	var found = false;
+	for (var i = 0; i < dataValues.length; i++) {
+		if (dataValues[i].code === regionCode) {
+			dataValues[i].color = color;
+			found = true;
+			break;
+		}
+	}
+	
+	if (!found) {
+		dataValues.push({
+			code: regionCode,
+			color: color
+		});
+	}
+	
+	var geoJsonLayer = shl1.getComponent("geoJsonLayer");
+	
+	if (geoJsonLayer) {
+		geoJsonLayer.eachLayer(function(layer) {
+			var props = layer.feature.properties;
+			var code = props.ctprvn_cd || props.sig_cd || props.emd_cd;
+			
+			if (code === regionCode) {
+				layer.setStyle({
+					fillColor: color
+				});
+			}
+		});
+	}
+}
+
+function updateRegionLabel(regionCode, labelText, options) {
+	var shl1 = app.lookup("shl1");
+	var mapConfig = shl1.getComponent("mapConfig");
+	var labels = mapConfig.labels || [];
+	var labelMarkers = shl1.getComponent("labelMarkers") || [];
+	labelMarkers.forEach(function(marker) {
+		marker.remove();
+	});
+	shl1.registerComponent("labelMarkers", []);
+	
+	var found = false;
+	for (var i = 0; i < labels.length; i++) {
+		if (labels[i].code === regionCode) {
+			labels[i].label = labelText;
+			if (options) {
+				labels[i].fontSize = options.fontSize || labels[i].fontSize;
+				labels[i].color = options.color || labels[i].color;
+			}
+			found = true;
+			break;
+		}
+	}
+	
+	if (!found) {
+		labels.push({
+			code: regionCode,
+			label: labelText,
+			fontSize: options ? options.fontSize : '12px',
+			color: options ? options.color : '#333'
+		});
+	}
+	
+	var map = shl1.getComponent("leafletMap");
+	var geoJsonLayer = shl1.getComponent("geoJsonLayer");
+	
+	if (geoJsonLayer) {
+		geoJsonLayer.eachLayer(function(layer) {
+			var props = layer.feature.properties;
+			var code = props.ctprvn_cd || props.sig_cd || props.emd_cd;
+			
+			if (code === regionCode) {
+				var bounds = layer.getBounds();
+				var center = bounds.getCenter();
+				
+				var labelItem;
+				for (var i = 0; i < labels.length; i++) {
+					if (labels[i].code === regionCode) {
+						labelItem = labels[i];
+						break;
+					}
+				}
+				
+				if (labelItem) {
+					var labelIcon = L.divIcon({
+						className: 'region-label',
+						html: '<div style="' +
+							'font-size: ' + (labelItem.fontSize || '12px') + ';' +
+							'color: ' + (labelItem.color || '#333') + ';' +
+							'font-weight: bold;' +
+							'text-align: center;' +
+							'white-space: nowrap;' +
+							'text-shadow: 1px 1px 2px white, -1px -1px 2px white;' +
+							'">' + labelItem.label + '</div>',
+						iconSize: null
+					});
+					
+					var labelMarker = L.marker(center, {
+						icon: labelIcon,
+						interactive: false,
+						zIndexOffset: 1000
+					});
+					
+					labelMarker.addTo(map);
+					
+					if (!shl1.getComponent("labelMarkers")) {
+						shl1.registerComponent("labelMarkers", []);
+					}
+					shl1.getComponent("labelMarkers").push(labelMarker);
+				}
+			}
+		});
+	}
+}
+
+function setCustomTooltip(regionCode, tooltipHTML) {
+	var shl1 = app.lookup("shl1");
+	var mapConfig = shl1.getComponent("mapConfig");
+	if (!mapConfig.customTooltips) {
+		mapConfig.customTooltips = {};
+	}
+	
+	mapConfig.customTooltips[regionCode] = tooltipHTML;
+	
+	var geoJsonLayer = shl1.getComponent("geoJsonLayer");
+	if (geoJsonLayer) {
+		geoJsonLayer.eachLayer(function(layer) {
+			var props = layer.feature.properties;
+			var code = props.ctprvn_cd || props.sig_cd || props.emd_cd;
+			
+			if (code === regionCode) {
+				layer.unbindTooltip();
+				layer.bindTooltip(tooltipHTML, {
+					permanent: false,
+					direction: 'center',
+					className: 'custom-tooltip'
+				});
+			}
+		});
+	}
+}
+
+function setHoverColor(regionCode, color) {
+	var shl1 = app.lookup("shl1");
+	var mapConfig = shl1.getComponent("mapConfig");
+	if (!mapConfig.hoverColors) {
+		mapConfig.hoverColors = {};
+	}
+	
+	mapConfig.hoverColors[regionCode] = color;
+}
+
+function addBackButton(map, targetLevel) {
+	var existingBackButton = app.lookup("shl1").getComponent("backButton");
+	if (existingBackButton) {
+		map.removeControl(existingBackButton);
+	}
+	var backButton = L.control({
+		position: 'topleft'
+	});
+	
+	backButton.onAdd = function() {
+		var div = L.DomUtil.create('div', 'back-button');
+		div.style.background = 'white';
+		div.style.padding = '10px 15px';
+		div.style.borderRadius = '5px';
+		div.style.boxShadow = '0 2px 5px rgba(0,0,0,0.2)';
+		div.style.cursor = 'pointer';
+		div.style.marginTop = '10px';
+		
+		if (targetLevel === 'sido') {
+			div.innerHTML = '← 시도 지도로 돌아가기';
+		} else if (targetLevel === 'sigungu') {
+			div.innerHTML = '← 시군구 지도로 돌아가기';
+		}
+		
+		div.onclick = function() {
+			if (targetLevel === 'sido') {
+				reloadSidoData(map);
+			} else if (targetLevel === 'sigungu') {
+				var mapConfig = app.lookup("shl1").getComponent("mapConfig");
+				if (mapConfig.parentSidoCode) {
+					drilldownToSigungu(map, mapConfig.parentSidoCode);
+				} else {
+					reloadSidoData(map);
+				}
+			}
+		};
+		
+		L.DomEvent.disableClickPropagation(div);
+		
+		return div;
+	};
+	
+	backButton.addTo(map);
+	app.lookup("shl1").registerComponent("backButton", backButton);
+}
+
+function reloadSidoData(map) {
+	var geoJsonLayer = app.lookup("shl1").getComponent("geoJsonLayer");
+	if (geoJsonLayer) {
+		map.removeLayer(geoJsonLayer);
+	}
+	var backButton = app.lookup("shl1").getComponent("backButton");
+	if (backButton) {
+		map.removeControl(backButton);
+	}
+	
+	var mapConfig = app.lookup("shl1").getComponent("mapConfig");
+	mapConfig.adminLevel = 'sido';
+	mapConfig.parentSidoCode = null;
+	mapConfig.parentSigunguCode = null;
+	mapConfig.targetBounds = null;
+	
+	map.setView([36.5, 127.5], 7);
+	
+	var vsApiUrl = mapConfig.apiUrl || "http://localhost:8080";
+	
+	showLoading(true);
+	
+	var sms1 = app.lookup("sms1");
+	
+	try {
+		if (sms1.xhr && sms1.xhr.readyState !== 4) {
+			sms1.xhr.abort();
+		}
+	} catch (e) {
+		console.log('Previous request abort failed:', e);
+	}
+	
+	sms1.removeAllEventListeners("submit-success");
+	sms1.removeAllEventListeners("submit-error");
+	
+	var url = vsApiUrl + '/api/map/sido.do';
+	sms1.action = url;
+	
+	var successHandler = function(e) {
+		var sub = e.control;
+		
+		if (!sub.xhr.responseText) {
+			showLoading(false);
+			return;
+		}
+		
+		try {
+			var data = JSON.parse(sub.xhr.responseText);
+			
+			if (data.error) {
+				throw new Error(data.error);
+			}
+			
+			if (data.type !== 'FeatureCollection' || !data.features || data.features.length === 0) {
+				throw new Error('유효한 GeoJSON 데이터가 없습니다.');
+			}
+			
+			renderGeoJson(map, data, app.getAppProperty("showTooltip") !== false);
+			showLoading(false);
+			
+		} catch (error) {
+			console.error('데이터 로드 실패:', error);
+			alert('지도 데이터를 불러올 수 없습니다.\n' + error.message);
+			showLoading(false);
+		}
+	};
+	
+	var errorHandler = function(e) {
+		console.error('API 호출 실패');
+		alert('API 호출에 실패했습니다.');
+		showLoading(false);
+	};
+	
+	sms1.addEventListener("submit-success", successHandler);
+	sms1.addEventListener("submit-error", errorHandler);
+	
+	sms1.send();
+}
+
+/************************************************
+ * [NEW] Interactive Drawing Functions
+ ************************************************/
+
+/**
+ * 그리기 툴바 생성
+ */
+function addDrawingToolbar(map) {
+	var toolbar = L.control({
+		position: 'topright'
+	});
+
+	toolbar.onAdd = function() {
+		var div = L.DomUtil.create('div', 'drawing-toolbar');
+		div.style.background = 'white';
+		div.style.padding = '5px';
+		div.style.borderRadius = '5px';
+		div.style.boxShadow = '0 2px 5px rgba(0,0,0,0.3)';
+		div.style.display = 'flex';
+		div.style.flexDirection = 'column';
+		div.style.gap = '5px';
+
+		var buttons = [{
+				id: 'marker',
+				label: '📍 마커',
+				title: '마커 추가'
+			},
+			{
+				id: 'polyline',
+				label: '➖ 경로',
+				title: '경로 그리기 (클릭으로 시작/추가, 더블클릭 종료)'
+			},
+			{
+				id: 'image',
+				label: '🖼 이미지',
+				title: '이미지 마커 추가'
+			},
+			{
+				id: 'panel',
+				label: '📄 패널',
+				title: '정보 패널 추가'
+			},
+			{
+				id: 'sparkline',
+				label: '📈 차트',
+				title: '스파크 차트 추가'
+			},
+			{
+				id: 'cancel',
+				label: '❌ 취소',
+				title: '그리기 취소'
+			}
+		];
+
+		buttons.forEach(function(btn) {
+			var button = document.createElement('button');
+			button.innerHTML = btn.label;
+			button.title = btn.title;
+			button.style.border = '1px solid #ddd';
+			button.style.background = '#f9f9f9';
+			button.style.padding = '8px 10px';
+			button.style.cursor = 'pointer';
+			button.style.borderRadius = '3px';
+			button.style.fontSize = '12px';
+			button.style.width = '100%';
+			button.style.textAlign = 'left';
+
+			button.onclick = function(e) {
+				L.DomEvent.stopPropagation(e);
+				if (btn.id === 'cancel') {
+					setDrawingMode(map, null);
+				} else {
+					setDrawingMode(map, btn.id);
+				}
+			};
+
+			div.appendChild(button);
+		});
+
+		return div;
+	};
+
+	toolbar.addTo(map);
+	app.lookup("shl1").registerComponent("drawingToolbar", toolbar);
+}
+
+/**
+ * 그리기 모드 설정
+ */
+function setDrawingMode(map, mode) {
+	// 기존 임시 라인 정리
+	if (drawState.tempPolyline) {
+		map.removeLayer(drawState.tempPolyline);
+		drawState.tempPolyline = null;
+		drawState.points = [];
+	}
+
+	drawState.mode = mode;
+	
+	// 커서 스타일 변경
+	var container = map.getContainer();
+	if (mode) {
+		container.style.cursor = 'crosshair';
+		console.log("그리기 모드 활성화: " + mode);
+	} else {
+		container.style.cursor = '';
+		console.log("그리기 모드 취소");
+	}
+}
+
+/**
+ * 지도 클릭 핸들러 (그리기 모드 분기)
+ */
+function handleMapClick(map, e) {
+	if (!drawState.mode) return;
+
+	var lat = e.latlng.lat;
+	var lng = e.latlng.lng;
+
+	if (drawState.mode === 'marker') {
+		openInputModal('마커 생성', [{
+			id: 'popup',
+			label: '팝업 내용',
+			type: 'text'
+		}], function(data) {
+			addMarkers(map, [{
+				lat: lat,
+				lng: lng,
+				popup: data.popup
+			}]);
+			setDrawingMode(map, null);
+		});
+	} else if (drawState.mode === 'polyline') {
+		drawState.points.push([lat, lng]);
+		
+		if (!drawState.tempPolyline) {
+			drawState.tempPolyline = L.polyline(drawState.points, {color: 'red'}).addTo(map);
+		} else {
+			drawState.tempPolyline.setLatLngs(drawState.points);
+		}
+	} else if (drawState.mode === 'image') {
+		openInputModal('이미지 추가', [{
+				id: 'url',
+				label: '이미지 URL',
+				type: 'text',
+				value: 'https://cdn-icons-png.flaticon.com/512/2776/2776067.png'
+			},
+			{
+				id: 'width',
+				label: '너비 (px)',
+				type: 'number',
+				value: '50'
+			},
+			{
+				id: 'height',
+				label: '높이 (px)',
+				type: 'number',
+				value: '50'
+			}
+		], function(data) {
+			addCustomImages(map, [{
+				lat: lat,
+				lng: lng,
+				url: data.url,
+				size: [parseInt(data.width), parseInt(data.height)]
+			}]);
+			setDrawingMode(map, null);
+		});
+	} else if (drawState.mode === 'panel') {
+		openInputModal('패널 추가', [{
+				id: 'title',
+				label: '제목',
+				type: 'text'
+			},
+			{
+				id: 'content',
+				label: 'HTML 내용',
+				type: 'textarea'
+			}
+		], function(data) {
+			addPanels(map, [{
+				lat: lat,
+				lng: lng,
+				title: data.title,
+				content: data.content
+			}]);
+			setDrawingMode(map, null);
+		});
+	} else if (drawState.mode === 'sparkline') {
+		openInputModal('스파크 차트 추가', [{
+				id: 'data',
+				label: '데이터 (쉼표로 구분, 예: 10,20,15,30)',
+				type: 'text'
+			},
+			{
+				id: 'label',
+				label: '라벨',
+				type: 'text'
+			}
+		], function(data) {
+			var dataArr = data.data.split(',').map(Number);
+			addSparkCharts(map, [{
+				lat: lat,
+				lng: lng,
+				data: dataArr,
+				label: data.label,
+				width: 100,
+				height: 40,
+				color: 'red'
+			}]);
+			setDrawingMode(map, null);
+		});
+	}
+}
+
+/**
+ * 경로 그리기 종료
+ */
+function finishPolyline(map) {
+	if (drawState.mode === 'polyline' && drawState.points.length > 1) {
+		var points = drawState.points; // 복사
+		openInputModal('경로 설정', [{id: 'color', label: '색상', type: 'color', value: '#e74c3c'}], function(data){
+			addPolylines(map, [{
+				points: points,
+				color: data.color,
+				weight: 4
+			}]);
+			setDrawingMode(map, null);
+		}, function(){
+			// 취소 시
+			if(drawState.tempPolyline) map.removeLayer(drawState.tempPolyline);
+			setDrawingMode(map, null);
+		});
+	} else {
+		setDrawingMode(map, null);
+	}
+}
+
+/**
+ * 공통 입력 모달 생성
+ */
+function openInputModal(title, fields, onConfirm, onCancel) {
+	var modal = document.createElement("div");
+	modal.style.position = "fixed";
+	modal.style.top = "50%";
+	modal.style.left = "50%";
+	modal.style.transform = "translate(-50%, -50%)";
+	modal.style.background = "white";
+	modal.style.padding = "20px";
+	modal.style.zIndex = "10001";
+	modal.style.boxShadow = "0 5px 15px rgba(0,0,0,0.5)";
+	modal.style.borderRadius = "5px";
+	modal.style.width = "300px";
+
+	var html = '<h3 style="margin-top:0">' + title + '</h3>';
+	
+	fields.forEach(function(f) {
+		html += '<div style="margin-bottom:10px;">';
+		html += '<label style="display:block;font-size:12px;color:#666;">' + f.label + '</label>';
+		if(f.type === 'textarea') {
+			html += '<textarea id="input-' + f.id + '" style="width:100%;height:60px;">' + (f.value || '') + '</textarea>';
+		} else if (f.type === 'color') {
+			html += '<input type="color" id="input-' + f.id + '" value="' + (f.value || '#000000') + '" style="width:100%;">';
+		} else {
+			html += '<input type="' + (f.type || 'text') + '" id="input-' + f.id + '" value="' + (f.value || '') + '" style="width:100%;padding:5px;box-sizing:border-box;">';
+		}
+		html += '</div>';
+	});
+
+	html += '<div style="text-align:right;margin-top:15px;">';
+	html += '<button id="modal-ok" style="padding:5px 15px;background:#3498db;color:white;border:none;border-radius:3px;margin-right:5px;cursor:pointer;">확인</button>';
+	html += '<button id="modal-cancel" style="padding:5px 10px;background:#ddd;border:none;border-radius:3px;cursor:pointer;">취소</button>';
+	html += '</div>';
+
+	modal.innerHTML = html;
+	document.body.appendChild(modal);
+
+	modal.querySelector('#modal-ok').onclick = function() {
+		var result = {};
+		fields.forEach(function(f) {
+			result[f.id] = document.getElementById('input-' + f.id).value;
+		});
+		document.body.removeChild(modal);
+		if (onConfirm) onConfirm(result);
+	};
+
+	modal.querySelector('#modal-cancel').onclick = function() {
+		document.body.removeChild(modal);
+		if(onCancel) onCancel();
+		else if(drawState.mode) setDrawingMode(app.lookup("shl1").getComponent("leafletMap"), null);
+	};
+}
