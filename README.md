@@ -45,3 +45,12 @@
 
 ---
 **Tip:** 이 UDC를 활용하면 별도의 GIS 엔진 없이도 강력한 데이터 시각화 대시보드를 구축할 수 있습니다.
+## ⚖️ License & Attribution
+
+This project is built upon several open-source libraries. For commercial use, please adhere to the following license terms:
+
+- **Leaflet.js**: [BSD 2-Clause License](https://github.com/Leaflet/Leaflet/blob/main/LICENSE)
+- **Leaflet.markercluster**: [MIT License](https://github.com/Leaflet/Leaflet.markercluster/blob/master/MIT-LICENSE.txt)
+- **Map Data**: [OpenStreetMap](https://www.openstreetmap.org/copyright) (ODbL) - *Requires attribution on the map display.*
+
+> **Note:** This UDC is designed for the **eXBuilder6** platform. Ensure you have a valid license for the eXBuilder6 framework before deploying to a production environment.
